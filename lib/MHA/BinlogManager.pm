@@ -40,6 +40,9 @@ sub new {
     relay_log_info      => undef,
     mysqlbinlog_version => undef,
     dir                 => undef,
+    mysqlbinlog_exe     => "mysqlbinlog",  # pass in escaped
+    mysqlbinlog_options => [],             # pass in escaped
+    error_tag           => "mysqlbinlog",
     prefix              => undef,
     cur_log             => undef,
     end_log             => undef,
@@ -56,7 +59,8 @@ sub get_apply_arg($) {
   if (
     should_suppress_row_format(
       $self->{mysqlbinlog_version},
-      $self->{mysql_version}
+      $self->{mysql_version},
+      $self->{error_tag}
     )
     )
   {
@@ -83,9 +87,10 @@ sub mysqlbinlog_version_ge {
 
 sub die_if_too_old_version {
   my $mysqlbinlog_version = shift;
+  my $error_tag           = shift;
   if ( !mysqlbinlog_ge_50($mysqlbinlog_version) ) {
     croak
-"mysqlbinlog version is $mysqlbinlog_version. This is too old. MHA supports MySQL version 5.0 (mysqlbinlog version 3.2) or higher. Recommended mysqlbinlog version is 3.3+, which is included in MySQL 5.1 or higher.\n";
+"$error_tag version is $mysqlbinlog_version. This is too old. MHA supports MySQL version 5.0 (mysqlbinlog version 3.2) or higher. Recommended mysqlbinlog version is 3.3+, which is included in MySQL 5.1 or higher.\n";
   }
 }
 
@@ -95,24 +100,37 @@ sub init_mysqlbinlog($) {
     unless ( $self->{mysql_version} ) {
       croak "mysql version not found.\n";
     }
-    my $v = `mysqlbinlog --version`;
+
+    # TODO whitelist options
+    my $options = "";
+    for(@{$self->{mysqlbinlog_options}}) {
+      $options = " " . $_;
+    }
+    $self->{mysqlbinlog_options} = $options;
+    $self->{error_tag} = "mysqlbinlog($self->{mysqlbinlog_exe})";
+
+    my $v = `$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --version`;
+    if ($?) {
+      my ($high,$low) = MHA::NodeUtil::system_rc($?);
+      croak "$self->{error_tag} version command failed with rc $high:$low, possible reasons: missing command, wrong args, or wrong path\n";
+    }
     chomp($v);
     if ( $v =~ /Ver (\d+\.\d+)/ ) {
       $self->{mysqlbinlog_version} = $1;
     }
-    croak "mysqlbinlog version not found!\n"
+    croak "$self->{error_tag} version not found!\n"
       unless ( $self->{mysqlbinlog_version} );
-    die_if_too_old_version( $self->{mysqlbinlog_version} );
+    die_if_too_old_version( $self->{mysqlbinlog_version}, $self->{error_tag} );
     if ( !mysqlbinlog_ge_51( $self->{mysqlbinlog_version} ) ) {
       print
-"mysqlbinlog version is $self->{mysqlbinlog_version} (included in MySQL Client 5.0 or lower). This is not recommended. Consider upgrading MySQL Client to 5.1 or higher.\n";
+"$self->{error_tag} version is $self->{mysqlbinlog_version} (included in MySQL Client 5.0 or lower). This is not recommended. Consider upgrading MySQL Client to 5.1 or higher.\n";
     }
     if ( !mysqlbinlog_ge_51( $self->{mysqlbinlog_version} )
       && $self->{mysql_version}
       && MHA::NodeUtil::mysql_version_ge( $self->{mysql_version}, "5.1.0" ) )
     {
       croak sprintf(
-"mysqlbinlog is %s (included in MySQL Client 5.0 or lower), but MySQL server version is %s. mysqlbinlog can not parse row based events. Terminating script for safety reasons.\n",
+"$self->{error_tag} is %s (included in MySQL Client 5.0 or lower), but MySQL server version is %s. mysqlbinlog can not parse row based events. Terminating script for safety reasons.\n",
         $self->{mysqlbinlog_version},
         $self->{mysql_version}
       );
@@ -325,12 +343,13 @@ sub get_post_file($) {
 sub should_suppress_row_format {
   my $mysqlbinlog_version = shift;
   my $mysql_version       = shift;
+  my $error_tag           = shift;
   my $suppress_row_format = 0;
   if ( mysqlbinlog_ge_51($mysqlbinlog_version)
     && !MHA::NodeUtil::mysql_version_ge( $mysql_version, "5.1.0" ) )
   {
     print
-"mysqlbinlog is 5.1 or higher, and MySQL version on the target server is 5.0 or lower. So using mysqlbinlog --base64-output=never to disable BINLOG events..\n";
+"$error_tag is 5.1 or higher, and MySQL version on the target server is 5.0 or lower. So using mysqlbinlog --base64-output=never to disable BINLOG events..\n";
     $suppress_row_format = 1;
   }
   return $suppress_row_format;
@@ -346,11 +365,12 @@ sub get_relaydir_and_files_from_rinfo {
   return ( $relay_dir, $end_relay_file, $exec_relay_file );
 }
 
-sub is_binlog_head_readable($) {
+sub is_binlog_head_readable($$) {
+  my $self = shift;
   my $file = shift;
 
   # higher than binlog file header (4 bytes)
-  return system("mysqlbinlog --stop-position=5 $file > /dev/null");
+  return system("$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --stop-position=5 $file > /dev/null");
 }
 
 sub get_end_binlog_fde($$$) {
@@ -499,7 +519,7 @@ sub dump_mysqlbinlog($$$$$$) {
     "echo \"# Binary/Relay log file $from_file started\" >> $out_diff_file";
   system($command);
 
-  $command = "mysqlbinlog --start-position=$from_pos ";
+  $command = "$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --start-position=$from_pos ";
   if ($suppress_row_format) {
     $command .= " --base64-output=never";
   }
@@ -514,7 +534,7 @@ sub dump_mysqlbinlog($$$$$$) {
   if ($rc) {
     my ( $high, $low ) = MHA::NodeUtil::system_rc($rc);
     croak
-"FATAL: mysqlbinlog to binlog/relaylog file $from_file, generating to $out_diff_file failed with rc $high:$low!\n";
+"FATAL: $self->{error_tag} to binlog/relaylog file $from_file, generating to $out_diff_file failed with rc $high:$low!\n";
   }
   return 0;
 }
@@ -537,7 +557,7 @@ sub concat_all_binlogs_from($$$$) {
   my $suppress_row_format;
   if ( !$handle_raw_binlog ) {
     $suppress_row_format =
-      should_suppress_row_format( $mysqlbinlog_version, $mysql_version );
+      should_suppress_row_format( $mysqlbinlog_version, $mysql_version, $self->{error_tag} );
   }
   print
 " Concat binary/relay logs from $binlog_prefix.$start_num pos $start_pos to $binlog_prefix.$end_num EOF into $outfile ..\n";
@@ -567,7 +587,7 @@ sub concat_all_binlogs_from($$$$) {
   }
   if ( -f $outfile ) {
     if ($handle_raw_binlog) {
-      croak "$outfile is broken!\n" if is_binlog_head_readable($outfile);
+      croak "$outfile is broken!\n" if $self->is_binlog_head_readable($outfile);
       if ( -s $outfile <=
         $self->get_end_binlog_fde( dirname($outfile), basename($outfile) ) )
       {
@@ -615,7 +635,7 @@ sub concat_generated_binlogs($$$) {
           $out );
       }
     }
-    if ( is_binlog_head_readable($out) ) {
+    if ( $self->is_binlog_head_readable($out) ) {
       croak "$out is broken!\n";
     }
   }

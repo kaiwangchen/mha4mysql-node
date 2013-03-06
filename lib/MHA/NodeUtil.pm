@@ -260,4 +260,27 @@ sub escape_for_mysql_command {
   return $ret;
 }
 
+# find mysql binaries
+sub find_executable {
+  my $exe       = shift;
+  my $opt       = shift;
+  my $do_escape = shift;
+  my $path;
+  if ($opt->{$exe}) {
+    croak "$exe($opt->{$exe}) is not executable\n"
+      unless -x $opt->{$exe};
+    $path = $opt->{$exe};
+  }
+  elsif($opt->{basedir}) {
+    my $_exe = "$opt->{basedir}/bin/$exe";
+    croak "$exe(basedir=$opt->{basedir}) is not executable\n"
+      unless -x $_exe;
+    $path = $_exe;
+  }
+  else {
+    $path = $exe;
+  }
+  return $do_escape ? escape_for_shell($path) : $path;
+}
+
 1;

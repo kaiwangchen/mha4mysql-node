@@ -33,6 +33,9 @@ GetOptions(
     help
     version
     command=s
+    basedir=s
+    defaults_file=s
+    no_defaults!
     start_file=s
     start_pos=i
     binlog_prefix=s
@@ -55,6 +58,18 @@ unless ( $opt{datadir} ) {
 $opt{binlog_dir} ||= "/var/lib/mysql";
 $opt{handle_raw_binlog} = 1 if ( !defined( $opt{handle_raw_binlog} ) );
 $opt{disable_log_bin}   = 0 if ( !defined( $opt{disable_log_bin} ) );
+
+my $_mysqlbinlog = MHA::NodeUtil::find_executable("mysqlbinlog", \%opt, "do_escape");
+my $_mysqlbinlog_options;
+if ($opt{no_defaults}) {
+  $_mysqlbinlog_options = ' --no-defaults';
+}
+elsif ($opt{defaults_file}) {
+  $_mysqlbinlog_options = " --defaults_file=$opt{defaults_file}";
+}
+else {
+  $_mysqlbinlog_options = '';
+}
 
 $| = 1;
 my $_binlog_manager;
@@ -92,6 +107,8 @@ sub main {
       handle_raw_binlog => $opt{handle_raw_binlog},
       disable_log_bin   => $opt{disable_log_bin},
       mysql_version     => $opt{oldest_version},
+      mysqlbinlog_exe   => $_mysqlbinlog,
+      mysqlbinlog_options => ($_mysqlbinlog_options ? [ $_mysqlbinlog_options ] : []),
       debug             => $opt{debug},
     );
     $_binlog_manager->init_mysqlbinlog() unless ( $opt{handle_raw_binlog} );

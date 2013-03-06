@@ -39,6 +39,9 @@ GetOptions(
     help
     version
     command=s
+    basedir=s
+    defaults_file=s
+    no_defaults!
     datadir=s
     relay_log_info=s
     relay_dir=s
@@ -94,6 +97,22 @@ if ( $opt{ssh_options} ) {
   $MHA::NodeConst::SSH_OPT_ALIVE = $opt{ssh_options};
 }
 
+my $_mysqlbinlog = MHA::NodeUtil::find_executable("mysqlbinlog", \%opt, "do_escape");
+my $_mysql       = MHA::NodeUtil::find_executable("mysql", \%opt, "do_escape");
+my ($_mysqlbinlog_options, $_mysql_options);
+if ($opt{no_defaults}) {
+  $_mysqlbinlog_options = ' --no-defaults';
+  $_mysql_options       = ' --no-defaults';
+}
+elsif ($opt{defaults_file}) {
+  $_mysqlbinlog_options = " --defaults_file=$opt{defaults_file}";
+  $_mysql_options       = " --defaults_file=$opt{defaults_file}";
+}
+else {
+  $_mysqlbinlog_options = '';
+  $_mysql_options       = '';
+}
+
 my $_binlog_manager;
 my $_find_logname_only = 0;
 my $_escaped_slave_user;
@@ -137,7 +156,7 @@ sub fast_find_pos() {
     # Checking binlog is readable from this position
     unless (
       system(
-"mysqlbinlog --start-position=$start_rlp --stop-position=$start_rlp $_binlog_manager->{dir}/$_binlog_manager->{end_log} > /dev/null"
+"$_mysqlbinlog$_mysqlbinlog_options --start-position=$start_rlp --stop-position=$start_rlp $_binlog_manager->{dir}/$_binlog_manager->{end_log} > /dev/null"
       )
       )
     {
@@ -225,7 +244,7 @@ sub do_generate($$$) {
 }
 
 sub use_binary_mode() {
-  my $v = `mysql --version`;
+  my $v = `$_mysql$_mysql_options --version`;
   my $mysqlclient_version;
   chomp($v);
   if ( $v =~ /Distrib (\d+\.\d+\.\d+)/ ) {
@@ -258,7 +277,7 @@ sub apply_diff($$) {
 
   if ( $opt{handle_raw_binlog} ) {
     if ( $#diffs == 0 ) {
-      $command = "mysqlbinlog $apply_files ";
+      $command = "$_mysqlbinlog$_mysqlbinlog_options $apply_files ";
     }
     else {
       my $out =
@@ -266,7 +285,7 @@ sub apply_diff($$) {
       MHA::NodeUtil::drop_file_if($out);
       $_binlog_manager->concat_generated_binlogs( \@diffs, $out );
       print "All apply target binary logs are concatinated at $out .\n";
-      $command = "mysqlbinlog $out ";
+      $command = "$_mysqlbinlog$_mysqlbinlog_options $out ";
     }
     $command .= $_binlog_manager->get_apply_arg();
   }
@@ -282,7 +301,7 @@ sub apply_diff($$) {
   escape_mysql_account();
 
   $command .=
-" | mysql $binary_mode --user=$_escaped_slave_user --password=$_escaped_slave_pass --host=$opt{slave_ip} --port=$opt{slave_port} -vvv --unbuffered > $err_file 2>&1";
+" | $_mysql$_mysql_options $binary_mode --user=$_escaped_slave_user --password=$_escaped_slave_pass --host=$opt{slave_ip} --port=$opt{slave_port} -vvv --unbuffered > $err_file 2>&1";
 
   # applying relay log
   print
@@ -359,12 +378,12 @@ sub check() {
 
   if (
     $rc = system(
-"mysql --user=$_escaped_slave_user --password=$_escaped_slave_pass --host=$opt{slave_ip} --port=$opt{slave_port} -e \"set sql_log_bin=0; create table if not exists mysql.apply_diff_relay_logs_test(id int); insert into mysql.apply_diff_relay_logs_test values(1); update mysql.apply_diff_relay_logs_test set id=id+1 where id=1; delete from mysql.apply_diff_relay_logs_test; drop table mysql.apply_diff_relay_logs_test;\""
+"$_mysql$_mysql_options --user=$_escaped_slave_user --password=$_escaped_slave_pass --host=$opt{slave_ip} --port=$opt{slave_port} -e \"set sql_log_bin=0; create table if not exists mysql.apply_diff_relay_logs_test(id int); insert into mysql.apply_diff_relay_logs_test values(1); update mysql.apply_diff_relay_logs_test set id=id+1 where id=1; delete from mysql.apply_diff_relay_logs_test; drop table mysql.apply_diff_relay_logs_test;\""
     )
     )
   {
     my ( $high, $low ) = MHA::NodeUtil::system_rc($rc);
-    croak "mysql command failed with rc $high:$low!\n";
+    croak "$_mysql command failed with rc $high:$low!\n";
   }
   print " done.\n";
   print "    Testing mysqlbinlog output..";
@@ -372,12 +391,12 @@ sub check() {
 
   if (
     $rc = system(
-"mysqlbinlog $_binlog_manager->{dir}/$_binlog_manager->{end_log} --start-position=4 --stop-position=4 > $workfile"
+"$_mysqlbinlog$_mysqlbinlog_options $_binlog_manager->{dir}/$_binlog_manager->{end_log} --start-position=4 --stop-position=4 > $workfile"
     )
     )
   {
     my ( $high, $low ) = MHA::NodeUtil::system_rc($rc);
-    croak "mysqlbinlog failed with rc $high:$low!\n";
+    croak "$_mysqlbinlog failed with rc $high:$low!\n";
   }
   print " done.\n";
   print "    Cleaning up test file(s)..";
@@ -471,6 +490,8 @@ sub main() {
       handle_raw_binlog => $opt{handle_raw_binlog},
       disable_log_bin   => $opt{disable_log_bin},
       mysql_version     => $opt{target_version},
+      mysqlbinlog_exe   => $_mysqlbinlog,
+      mysqlbinlog_options => ($_mysqlbinlog_options ? [ $_mysqlbinlog_options ] : []),
       debug             => $opt{debug},
     );
     if (!$opt{handle_raw_binlog}
