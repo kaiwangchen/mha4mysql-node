@@ -42,6 +42,7 @@ sub new {
     dir                 => undef,
     mysqlbinlog_exe     => "mysqlbinlog",  # pass in escaped
     mysqlbinlog_options => [],             # pass in escaped
+    mysqlbinlog_libdirs => [],             # ditto
     error_tag           => "mysqlbinlog",
     prefix              => undef,
     cur_log             => undef,
@@ -102,14 +103,14 @@ sub init_mysqlbinlog($) {
     }
 
     # TODO whitelist options
-    my $options = "";
-    for(@{$self->{mysqlbinlog_options}}) {
-      $options = " " . $_;
-    }
-    $self->{mysqlbinlog_options} = $options;
+    $self->{mysqlbinlog} = MHA::NodeUtil::cli_prefix(
+      $self->{mysqlbinlog_exe},
+      $self->{mysqlbinlog_options},
+      $self->{mysqlbinlog_libdirs}
+    );
     $self->{error_tag} = "mysqlbinlog($self->{mysqlbinlog_exe})";
 
-    my $v = `$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --version`;
+    my $v = `$self->{mysqlbinlog} --version`;
     if ($?) {
       my ($high,$low) = MHA::NodeUtil::system_rc($?);
       croak "$self->{error_tag} version command failed with rc $high:$low, possible reasons: missing command, wrong args, or wrong path\n";
@@ -370,7 +371,7 @@ sub is_binlog_head_readable($$) {
   my $file = shift;
 
   # higher than binlog file header (4 bytes)
-  return system("$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --stop-position=5 $file > /dev/null");
+  return system("$self->{mysqlbinlog} --stop-position=5 $file > /dev/null");
 }
 
 sub get_end_binlog_fde($$$) {
@@ -519,7 +520,7 @@ sub dump_mysqlbinlog($$$$$$) {
     "echo \"# Binary/Relay log file $from_file started\" >> $out_diff_file";
   system($command);
 
-  $command = "$self->{mysqlbinlog_exe}$self->{mysqlbinlog_options} --start-position=$from_pos ";
+  $command = "$self->{mysqlbinlog} --start-position=$from_pos ";
   if ($suppress_row_format) {
     $command .= " --base64-output=never";
   }

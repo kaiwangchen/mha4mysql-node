@@ -283,4 +283,19 @@ sub find_executable {
   return $do_escape ? escape_for_shell($path) : $path;
 }
 
+sub cli_prefix {
+  my $exe     = shift;
+  my $options = shift;
+  my $libdirs = shift;
+  my $cli     = $exe;
+  if ( @{$libdirs} ) {
+    my $env = "LD_LIBRARY_PATH=" . join(":", @{$libdirs}, '$LD_LIBRARY_PATH');
+    $cli = "$env $cli";
+  }
+  if ( @{$options} ) {
+    $cli .= " " . join(" ",@{$options});
+  }
+  return $cli;
+}
+
 1;
