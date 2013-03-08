@@ -51,6 +51,15 @@ sub new {
     debug               => undef,
     @_,
   };
+
+  # TODO whitelist options
+  $self->{mysqlbinlog} = MHA::NodeUtil::cli_prefix(
+    $self->{mysqlbinlog_exe},
+    $self->{mysqlbinlog_options},
+    $self->{mysqlbinlog_libdirs}
+  );
+  $self->{error_tag} = "mysqlbinlog($self->{mysqlbinlog_exe})";
+
   return bless $self, $class;
 }
 
@@ -101,14 +110,6 @@ sub init_mysqlbinlog($) {
     unless ( $self->{mysql_version} ) {
       croak "mysql version not found.\n";
     }
-
-    # TODO whitelist options
-    $self->{mysqlbinlog} = MHA::NodeUtil::cli_prefix(
-      $self->{mysqlbinlog_exe},
-      $self->{mysqlbinlog_options},
-      $self->{mysqlbinlog_libdirs}
-    );
-    $self->{error_tag} = "mysqlbinlog($self->{mysqlbinlog_exe})";
 
     my $v = `$self->{mysqlbinlog} --version`;
     if ($?) {
